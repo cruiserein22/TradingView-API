@@ -1,0 +1,63 @@
+//@version=5
+strategy("ATR Trend Strategy", overlay=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// Original Indicator Parameters
+ATRBASElength = input.int(30, 'Swing Detection Lookback')
+ATRBASEmult = input.float(1., 'ATR Slope', minval=0, step=.1)
+
+// Strategy-Specific Inputs
+useStopLoss = input.bool(true, "Use Stop Loss")
+stopLossAtr = input.float(2, "Stop Loss (ATR multiplier)", minval=0.1, step=0.1)
+useTakeProfit = input.bool(true, "Use Take Profit")
+takeProfitAtr = input.float(3, "Take Profit (ATR multiplier)", minval=0.1, step=0.1)
+minBarsBetwTrades = input.int(10, "Minimum Bars Between Trades", minval=1)
+
+// Calculations
+var float ATRBASEupper = 0.
+var float ATRBASElower = 0.
+var float ATRBASEslope_ph = 0.
+var float ATRBASEslope_pl = 0.
+
+bbase = bar_index
+src = close
+ph = ta.pivothigh(ATRBASElength, ATRBASElength)
+pl = ta.pivotlow(ATRBASElength, ATRBASElength)
+atrSlope = ta.atr(ATRBASElength) / ATRBASElength * ATRBASEmult
+
+// Update slopes
+ATRBASEslope_ph := ph ? atrSlope : ATRBASEslope_ph
+ATRBASEslope_pl := pl ? atrSlope : ATRBASEslope_pl
+
+// Update channels
+ATRBASEupper := ph ? ph : ATRBASEupper - ATRBASEslope_ph
+ATRBASElower := pl ? pl : ATRBASElower + ATRBASEslope_pl
+
+// Calculate real-time levels
+upperLevel = ATRBASEupper - ATRBASEslope_ph * ATRBASElength
+lowerLevel = ATRBASElower + ATRBASEslope_pl * ATRBASElength
+
+// Trading conditions
+var int barsLastTrade = minBarsBetwTrades
+barsLastTrade := strategy.position_size == 0 ? barsLastTrade + 1 : 0
+
+longCondition = close > upperLevel and barsLastTrade >= minBarsBetwTrades
+shortCondition = close < lowerLevel and barsLastTrade >= minBarsBetwTrades
+
+// Position Management
+atr = ta.atr(ATRBASElength)
+stopLoss = useStopLoss ? stopLossAtr * atr : na
+takeProfit = useTakeProfit ? takeProfitAtr * atr : na
+
+if (longCondition and strategy.position_size <= 0)
+    strategy.entry("Long", strategy.long)
+    if useStopLoss
+        strategy.exit("Long SL/TP", "Long", stop=close - stopLoss, limit=close + takeProfit)
+
+if (shortCondition and strategy.position_size >= 0)
+    strategy.entry("Short", strategy.short)
+    if useStopLoss
+        strategy.exit("Short SL/TP", "Short", stop=close + stopLoss, limit=close - takeProfit)
+
+// Plotting for visualization
+plot(upperLevel, "Upper Channel", color=color.green)
+plot(lowerLevel, "Lower Channel", color=color.red)

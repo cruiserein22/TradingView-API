@@ -1,0 +1,138 @@
+//@version=5
+strategy("Combined Strategy: ATRLONG + THE ONE", overlay=true, initial_capital=50000)
+
+// -------------------------------------------
+// User Inputs (Shared and Strategy-Specific)
+// -------------------------------------------
+// Shared Inputs
+ATRBASElength       = input.int(30, 'Swing Detection Lookback', minval = 1, step = 5)
+ATRBASEmult         = input.float(1.0, 'ATR Slope Multiplier', minval = 0, step = 0.1)
+ATRBASEcalcmethod   = input.string('Atr', 'Slope Calculation Method', options = ['Atr', 'StdDev'])
+ATRBASEshowext      = input.bool(true, 'Show Extended Lines')
+ATRBASEupcss        = input.color(color.rgb(1, 254, 127, 78), 'Up Trendline Color')
+ATRBASEdncss        = input.color(color.rgb(255, 0, 0, 80), 'Down Trendline Color')
+ATRBASEbackpaint    = input.bool(false, "Back Paint Mode")
+
+// THE ONE Inputs
+match_line_color_input       = input.color(#ffe49af7,  title="Dotted Line Color")
+match_line_width_input       = input.int(2, title="Dotted Line Width", minval=1, maxval=15)
+sl_line_color_input          = input.color(color.red, title="Stop Loss Line Color")
+entry_line_color_input       = input.color(color.rgb(255, 187, 0, 3), title="Entry Line Color")
+tp_line_color_input          = input.color(color.green, title="Take Profit Line Color")
+line_length_input            = input.int(5, title="Line Length (Bars)", minval=1, maxval=100)
+TICK_SIZE                    = syminfo.mintick
+TAKE_PROFIT_TICKS            = input.int(1, title="Take Profit (in ticks)", minval=1)
+STOP_LOSS_TICKS              = input.int(7, title="Stop Loss (in ticks)", minval=1)
+PRICE_TOLERANCE              = TICK_SIZE * 0.1
+
+// -------------------------------------------
+// ATR-Based Lines Logic (ATRLONG)
+// -------------------------------------------
+var offset = ATRBASEbackpaint ? ATRBASElength : 0
+var line ATRBASEuptl = line.new(na, na, na, na, color=ATRBASEupcss, style=line.style_solid, extend=extend.both, width=1)
+var line ATRBASEdntl = line.new(na, na, na, na, color=ATRBASEdncss, style=line.style_solid, extend=extend.both, width=1)
+
+bbase = bar_index
+ATRBASEsrc = close
+
+// Calculate pivot points
+ATRBASEph = ta.pivothigh(ATRBASElength, ATRBASElength)
+ATRBASEpl = ta.pivotlow(ATRBASElength, ATRBASElength)
+
+// Calculate slopes
+ATRBASEslope = switch ATRBASEcalcmethod
+    'Atr'    => ta.atr(ATRBASElength) / ATRBASElength * ATRBASEmult
+    'StdDev' => ta.stdev(ATRBASEsrc, ATRBASElength) / ATRBASElength * ATRBASEmult
+    => na
+
+ATRBASEslope_ATRBASEph = ATRBASEslope
+ATRBASEslope_ATRBASEpl = ATRBASEslope
+
+// Calculate upper and lower levels
+ATRBASEupper = ta.highest(high, ATRBASElength)
+ATRBASElower = ta.lowest(low, ATRBASElength)
+
+// Update lines
+if (not na(ATRBASEph) and ATRBASEshowext)
+    ATRBASEuptl.set_xy1(bbase-offset, ATRBASEbackpaint ? ATRBASEph : ATRBASEupper - ATRBASEslope_ATRBASEph * ATRBASElength)
+    ATRBASEuptl.set_xy2(bbase-offset+1, ATRBASEbackpaint ? ATRBASEph - ATRBASEslope : ATRBASEupper - ATRBASEslope_ATRBASEph * (ATRBASElength+100))
+
+if (not na(ATRBASEpl) and ATRBASEshowext)
+    ATRBASEdntl.set_xy1(bbase-offset, ATRBASEbackpaint ? ATRBASEpl : ATRBASElower + ATRBASEslope_ATRBASEpl * ATRBASElength)
+    ATRBASEdntl.set_xy2(bbase-offset+1, ATRBASEbackpaint ? ATRBASEpl + ATRBASEslope : ATRBASElower + ATRBASEslope_ATRBASEpl * (ATRBASElength+100))
+
+// Plot the levels
+plot(ATRBASEbackpaint ? ATRBASEupper : ATRBASEupper - ATRBASEslope_ATRBASEph * ATRBASElength, 'ATRBASEupper', 
+     color = not na(ATRBASEph) ? na : ATRBASEupcss, offset = -offset, linewidth = 1)
+plot(ATRBASEbackpaint ? ATRBASElower : ATRBASElower + ATRBASEslope_ATRBASEpl * ATRBASElength, 'ATRBASElower', 
+     color = not na(ATRBASEpl) ? na : ATRBASEdncss, offset = -offset, linewidth = 1)
+
+// -------------------------------------------
+// Same-Level Detection Logic (THE ONE)
+// -------------------------------------------
+same_level(price1, price2) => 
+    not na(price1) and not na(price2) and math.abs(price1 - price2) <= PRICE_TOLERANCE
+
+var float price_level = na
+var int idx1 = na
+var int idx2 = na
+var bool found = false
+var bool top_match = false
+var bool bottom_match = false
+
+// Reset values
+found := false
+top_match := false
+bottom_match := false
+
+float h1 = high[0]
+float h2 = high[1]
+float l1 = low[0]
+float l2 = low[1]
+
+// Check for top match
+if same_level(h1, h2)
+    price_level := math.avg(h1, h2)
+    idx1 := bar_index
+    idx2 := bar_index - 1
+    found := true
+    top_match := true
+    bottom_match := false
+// Check for bottom match if no top match found
+if (not found and same_level(l1, l2))
+    price_level := math.avg(l1, l2)
+    idx1 := bar_index
+    idx2 := bar_index - 1
+    found := true
+    top_match := false
+    bottom_match := true
+
+// Trading Logic
+if (found and not found[1] and not na(price_level))
+    if (top_match)
+        entry_price = price_level + TICK_SIZE
+        stop_loss = price_level - (STOP_LOSS_TICKS * TICK_SIZE)
+        take_profit = entry_price + (TAKE_PROFIT_TICKS * TICK_SIZE)
+        
+        if (not na(entry_price) and not na(stop_loss) and not na(take_profit))
+            strategy.entry("Long", strategy.long, stop=entry_price, comment="LONG")
+            strategy.exit("Long Exit", "Long", stop=stop_loss, limit=take_profit)
+
+            line.new(bar_index, price_level, bar_index + line_length_input, price_level, color=match_line_color_input, width=match_line_width_input, style=line.style_dotted)
+            line.new(bar_index, stop_loss, bar_index + line_length_input, stop_loss, color=sl_line_color_input, width=2)
+            line.new(bar_index, entry_price, bar_index + line_length_input, entry_price, color=entry_line_color_input, width=2)
+            line.new(bar_index, take_profit, bar_index + line_length_input, take_profit, color=tp_line_color_input, width=2)
+
+    if (bottom_match)
+        entry_price = price_level - TICK_SIZE
+        stop_loss = price_level + (STOP_LOSS_TICKS * TICK_SIZE)
+        take_profit = entry_price - (TAKE_PROFIT_TICKS * TICK_SIZE)
+        
+        if (not na(entry_price) and not na(stop_loss) and not na(take_profit))
+            strategy.entry("Short", strategy.short, stop=entry_price, comment="SHORT")
+            strategy.exit("Short Exit", "Short", stop=stop_loss, limit=take_profit)
+
+            line.new(bar_index, price_level, bar_index + line_length_input, price_level, color=match_line_color_input, width=match_line_width_input, style=line.style_dotted)
+            line.new(bar_index, stop_loss, bar_index + line_length_input, stop_loss, color=sl_line_color_input, width=2)
+            line.new(bar_index, entry_price, bar_index + line_length_input, entry_price, color=entry_line_color_input, width=2)
+            line.new(bar_index, take_profit, bar_index + line_length_input, take_profit, color=tp_line_color_input, width=2)
